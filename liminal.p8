@@ -6,7 +6,7 @@ __lua__
 
 function _init()
  w = world()
- load_map()
+ w:load_from_map(128, 128)
  
  w:add_entity(player(), 'player')
 end
@@ -453,6 +453,24 @@ end
 
 function world:get_tagged_entities(tag)
  return self.tagged_entities[tag]
+end
+
+----
+
+function world:load_from_map(w, h)
+ for i = 1, w do
+  for j = 1, h do
+   local mx, my = i - 1, j - 1
+   
+   local tile_id = mget(mx, my)
+   
+   if fget(tile_id, tile_types.solid) then
+    local e = entity(mx * 8, my * 8, sprite(tile_id))
+	
+	self:add_entity(e)
+   end
+  end
+ end
 end
 
 ----
