@@ -366,22 +366,6 @@ function is_tile_solid(x, y)
  return is_tile_type(x, y, tile_types.solid)
 end
 
-----
-
-function load_map()
- for i = 1, 128 do
-  for j = 1, 128 do
-   local mx, my = i - 1, j - 1
-   
-   local tile = mget(mx, my)
-   
-   if fget(tile, tile_types.solid) then
-    w:add_entity(entity(mx * 8, my * 8, sprite(tile)))
-   end
-  end
- end
-end
-
 -->8
 --------------
 -- entities --
