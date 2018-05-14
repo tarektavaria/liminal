@@ -6,9 +6,19 @@ __lua__
 
 function _init()
  w = world()
- w:load_from_map(128, 128)
+ w:load_from_map(1, 1, 128, 128)
  
- w:add_entity(player(), 'player')
+ local e = w:create_entity('player')
+ 
+ e:add_components(position(0, 0), velocity(0, 0), display(sprite(64)))
+ 
+ local a = animator()
+ a:add_animation('walk_r', animation(sprite.batch(112, 113, 114)))
+ a:add_animation('walk_l', animation(sprite.batch(80, 81, 82)))
+ a:add_animation('walk_d', animation(sprite.batch(64, 65)))
+ a:add_animation('walk_u', animation(sprite.batch(96, 97, 98)))
+ 
+ e:add_components(a)
 end
 
 function _update()
@@ -18,44 +28,18 @@ end
 function _draw()
  cls()
  
- -- draw all map tiles
- -- todo: draw only background tiles
- -- map()
+ -- set camera
+ -- draw background tiles
  
  w:draw()
  
- -- draw foreground map tiles
- -- map(0, 0, 0, 0, 128, 64, 0x1)
- 
- -- debug_draw()
+ -- draw foreground tiles
+ -- reset camera
 end
 -->8
 -----------------------------
 -- debugging and utilities --
 -----------------------------
-
--- todo: create a debug mask?
-show_colliders = true
-
-show_cpu = true
-show_fps = true
-
-function debug_draw()
- color(7)
- 
- if show_colliders then
-  for e in all(w.entities) do
-   local c = e:get_collider()
-   
-   c:draw(7)
-  end
- end
- 
- if (show_cpu) print('cpu: ' .. stat(1))
- if (show_fps) print('fps: ' .. stat(7))
-end
-
-----
 
 -- https://gist.github.com/tylerneylon/81333721109155b2d244
 function clone(var, seen)
@@ -74,7 +58,7 @@ function clone(var, seen)
  return result
 end
 
-function each(list, func)
+function every(list, func)
  for _, v in pairs(list) do
   if (not func(v)) return false
  end
@@ -82,7 +66,15 @@ function each(list, func)
  return true
 end
 
-----
+function index_add(table, index, element)
+ if (not table[index]) table[index] = {}
+ 
+ add(table[index], element)
+end
+
+function index_remove(table, index, element)
+ if (table[index]) del(table[index], element)
+end
 
 function is_number(var)
  return type(var) == 'number'
@@ -92,8 +84,6 @@ function is_table(var)
  return type(var) == 'table'
 end
 
-----
-
 function to_seconds(ticks)
  return ticks / 30
 end
@@ -102,59 +92,59 @@ function to_ticks(seconds)
  return seconds * 30
 end
 -->8
----------
--- oop --
----------
+-------------------
+-- class objects --
+-------------------
 
 -- https://github.com/rxi/classic
 object = {}
 object.__index = object
 
-function object:extend()
- local o = {}
+function object:extend(name)
+ local new_object = {}
  
  for k, v in pairs(self) do
-  if sub(k, 1, 2) == '__' then
-   o[k] = v
-  end
+  if (sub(k, 1, 2) == '__') new_object[k] = v
  end
  
- o.__index = o
- o.super = self
+ new_object.__index = new_object
+ new_object.super = self
  
- return setmetatable(o, self)
+ new_object.name = name or 'object'
+ 
+ return setmetatable(new_object, self)
 end
 
-function object:is(obj)
- local mt = getmetatable(self)
+function object:is(class)
+ local metatable = getmetatable(self)
  
- while mt do
-  if (mt == obj) return true
+ while metatable do
+  if (metatable == class) return true
   
-  mt = getmetatable(mt)
+  metatable = getmetatable(metatable)
  end
  
  return false
 end
 
-----
+---
 
 function object:new()
  -- empty
 end
 
-function object:str()
- return 'non-extended object'
+function object:to_string()
+ return self.name
 end
 
-----
+---
 
 function object:__call(...)
- local o = setmetatable({}, self)
+ local new_object = setmetatable({}, self)
  
- o:new(...)
+ new_object:new(...)
  
- return o
+ return new_object
 end
 -->8
 --------------------------
@@ -172,7 +162,7 @@ function vector:str()
  return '[' .. self.x .. ', ' .. self.y .. ']'
 end
 
-----
+---
 
 function vector:dot(vec)
  return self.x * vec.x + self.y + vec.y
@@ -197,7 +187,7 @@ function vector:unpack()
  return self.x, self.y
 end
 
-----
+---
 
 function vector:__add(vec)
  return vector(self.x + vec.x, self.y + vec.y)
@@ -219,9 +209,7 @@ function vector:__unm()
  return vector(-self.x, -self.y)
 end
 
---------------------
--- basic geometry --
---------------------
+--//--
 
 box = object:extend()
 
@@ -263,13 +251,13 @@ function sprite:draw(x, y)
  spr(self.id, x, y, self.w, self.h)
 end
 
-----
+---
 
 -- creates an array of 1x1 sprites from ids
 function sprite.batch(...)
  local args = {...}
  
- assert(each(args, is_number))
+ assert(every(args, is_number))
  
  local sprites = {}
  
@@ -281,9 +269,7 @@ function sprite.batch(...)
  return sprites
 end
 
----------------
--- animation --
----------------
+--//--
 
 animation = object:extend()
  
@@ -301,7 +287,7 @@ function animation:new(sprites, delay, is_looped)
  self.is_looped = (is_looped == nil) and true or is_looped
 end
  
-----
+---
  
 function animation:update()
  if (self.state ~= 'playing') return
@@ -322,7 +308,7 @@ function animation:update()
  end
 end
  
-----
+---
  
 -- returns frame or current_sprite if nil
 function animation:get_sprite(frame)
@@ -347,346 +333,304 @@ function animation:resume()
  if (self.state == 'paused') self.state = 'playing'
 end
 -->8
-----------------------------
--- tiles, map, and camera --
-----------------------------
+---------------------------------------
+-- entities, components, and systems --
+---------------------------------------
 
-tile_types = {
- foreground = 0,
- solid      = 1
-}
+entity = object:extend()
 
-function is_tile_type(x, y, type)
- local mx, my = flr(x/8), flr(y/8)
+function entity:new(world)
+ self.world = world
  
- return fget(mget(mx, my), type)
+ self.alive = true
+ self.tags = {}
 end
 
-function is_tile_solid(x, y)
- return is_tile_type(x, y, tile_types.solid)
+---
+
+function entity:add_components(...)
+ local components = {...}
+ 
+ for _, component in pairs(components) do
+  self[component.name] = component
+  self.world:tag_entity(component.name, self)
+ end
 end
 
--->8
---------------
--- entities --
---------------
+function entity:remove_component(...)
+ local components = {...}
+ 
+ for _, component in pairs(components) do
+  self[component.name] = nil
+  self.world:untag_entity(component.name, self)
+ end
+end
+
+---
+
+function entity:set_name(name)
+ self.world:name_entity(name, self)
+end
+
+---
+
+function entity:add_tags(...)
+ local tags = {...}
+ 
+ for _, tag in pairs(tags) do
+  add(self.tags, tag)
+  self.world:tag_entity(tag, self)
+ end
+end
+
+function entity:remove_tags(...)
+ local tags = {...}
+ 
+ for _, tag in pairs(tags) do
+  del(self.tags, tag)
+  self.world:untag_entity(tag, self)
+ end
+end
+
+--//--
+
+animator = object:extend('animator')
+
+function animator:new()
+ self.animations = {}
+end
+
+function animator:add_animation(name, animation)
+ if (not self.current_animation) self.current_animation = name
+ 
+ self.animations[name] = animation
+end
+
+function animator:get_animation(name)
+ return self.animations[name or self.current_animation]
+end
+
+function animator:set_animation(name)
+ if (self.current_animation == name) return
+ 
+ self.current_animation = name
+ self:get_animation():restart()
+end
+
+---
+
+collider = object:extend('collider')
+
+function collider:new(box, mask) 
+ self.box  = box
+ self.mask = mask or 0x01
+end
+
+---
+
+display = object:extend('display')
+
+function display:new(sprite, layer)
+ self.visible = true
+ 
+ self.sprite = sprite
+ self.layer  = layer or 1
+end
+
+---
+
+-- player_input = object:extend('player_input')
+-- player_input.acceleration = 1.0
+
+---
+
+position = vector:extend('position')
+
+---
+
+velocity = vector:extend('velocity')
+
+--//--
+
+function handle_movement(world)
+ local entities = world:get_entities_tagged_with('position', 'velocity')
+ 
+ foreach(entities, function(e) e.position += e.velocity end)
+end
+
+function handle_animation(world)
+ local entities = world:get_entities_tagged_with('animator')
+ 
+ for _, e in pairs(entities) do
+  e.animator:get_animation():update()
+  
+  if e.display then
+   e.display.sprite = e.animator:get_animation():get_sprite()
+  end
+ end
+end
+
+function handle_player_input(world)
+ if (not world.entities_named['player']) return
+ 
+ local player = world.entities_named['player']
+
+ local xin = btn(➡️) and 1 or btn(⬅️) and -1 or 0
+ local yin = btn(⬇️) and 1 or btn(⬆️) and -1 or 0
+ 
+ if xin ~= 0 or yin ~= 0 then
+  player.animator:get_animation():resume()
+  
+  if xin > 0 then
+   player.animator:set_animation('walk_r')
+  elseif xin < 0 then
+   player.animator:set_animation('walk_l')
+  end
+  
+  if yin > 0 then
+   player.animator:set_animation('walk_d')
+  elseif yin < 0 then
+   player.animator:set_animation('walk_u')
+  end
+ else
+  player.animator:get_animation():pause()
+ end
+ 
+ player.velocity = velocity(xin, yin)
+end
+
+--//--
 
 world = object:extend()
 
 function world:new()
  self.entities = {}
  
- self.named_entities = {} -- name / e
- self.tagged_entities = {} -- tag / {e1, e2, ..., en}
+ self.entities_named = {}  -- name / e
+ self.entities_tagged = {} -- tag / {e1, e2, ..., en}
 end
 
 function world:update()
- for e in all(self.entities) do
-  e:update()
- end
+ -- update systems
+ handle_player_input(self)
 
- -- todo collisions
+ handle_movement(self)
+ handle_animation(self)
  
- for e in all(self.entities) do
-  if not e.alive then
-   self:remove_entity(e)
-  end
- end
+ self:clean_up()
 end
 
 function world:draw()
- for e in all(self.entities) do
-  e:draw()
+ local drawables = {}
+ 
+ for _, e in pairs(self:get_entities_tagged_with('display', 'position')) do
+  index_add(drawables, e.display.layer, e)
+ end
+ 
+ for layer = 1, 16 do
+  if drawables[layer] then
+   for _, e in pairs(drawables[layer]) do
+    if (e.display.visible) e.display.sprite:draw(e.position:unpack())
+   end
+  end
  end
 end
 
-----
+---
 
-function world:add_entity(e, name)
+function world:clean_up()
+ for _, e in pairs(self.entities) do
+  if (not e.alive) self:destroy_entity(e)
+ end
+end
+
+---
+
+function world:create_entity(name, ...)
+ local e = entity(self)
+ 
  add(self.entities, e)
  
- if name and not self.named_entities[name] then
-  self.named_entities[name] = e
+ e:set_name(name)
+ e:add_tags(...)
+ 
+ return e
+end
+
+function world:destroy_entity(entity)
+ del(self.entities, entity)
+ 
+ for name, e in pairs(self.entities_named) do
+  if (e == entity) self.entities_named[name] = nil
  end
  
- if e.tags then
-  for t in all(e.tags) do
-   if not self.tagged_entities[t] then
-    self.tagged_entities[t] = {}
+ for tag, _ in pairs(self.entities_tagged) do
+  del(self.entities_tagged[tag], entity)
+ end
+end
+
+---
+
+function world:name_entity(name, entity)
+ if (name and not self.entities_named[name]) self.entities_named[name] = entity
+end
+
+function world:tag_entity(tag, entity)
+ index_add(self.entities_tagged, tag, entity)
+end
+
+function world:untag_entity(tag, entity)
+ index_remove(self.entities_tagged, tag, entity)
+end
+
+---
+
+-- fixme: runtime error if trying to pull from nil bucket
+function world:get_entities_tagged_with(...) 
+ local function intersection(s1, s2)
+  local result = {}
+  
+  for _, v1 in pairs(s1) do
+   for _, v2 in pairs(s2) do
+    if (v1 == v2) add(result, v1)
    end
+  end
+  
+  return result
+ end
+ 
+ local tags = {...}
+ local tagged = {}
+ 
+ for index, tag in pairs(tags) do
+  if (index == 1) tagged = self.entities_tagged[tag]
+  
+  if index + 1 <= #tags then
+   local next_tag = tags[index + 1]
    
-   add(self.tagged_entities[t], e)   
+   tagged = intersection(tagged, self.entities_tagged[next_tag])
   end
  end
-end
-
-function world:remove_entity(e)
- del(self.entities, e)
- del(self.named_entities, e)
  
- for t in all(self.tagged_entities) do
-  del(self.tagged_entities[t], e)
- end
+ return tagged
 end
 
-----
+---
 
-function world:get_named_entity(name)
- return self.named_entities[name]
-end
-
-function world:get_tagged_entities(tag)
- return self.tagged_entities[tag]
-end
-
-----
-
-function world:load_from_map(w, h)
- for i = 1, w do
-  for j = 1, h do
+function world:load_from_map(start_x, start_y, end_x, end_y)
+ for i = start_x, end_x do
+  for j = start_y, end_y do
    local mx, my = i - 1, j - 1
-   
    local tile_id = mget(mx, my)
    
-   if fget(tile_id, tile_types.solid) then
-    local e = entity(mx * 8, my * 8, sprite(tile_id))
-	
-	self:add_entity(e)
-   end
-  end
- end
-end
-
-----
-
-function do_entity_collisions()
- for i = 1, #entities - 1 do
-  for j = i + 1, #entities do
-   local e1, e2 = entities[i], entities[j]
+   if tile_id ~= 0 then
+    local e = self:create_entity()
    
-   if band(e1.collision_mask, e2.collision_mask) ~= 0 then
-    local c1, c2 = e1:get_collider(), e2:get_collider()
-	
-	if (c1:intersects(c2)) e1:handle_collision(e2)
+    e:add_components(position(mx * 8, my * 8))
+    e:add_components(display(sprite(tile_id)))
    end
   end
  end
-end
-
-----
-
-entity = object:extend()
-
-function entity:new(x, y, base_sprite, ...)
- self.alive = true
- 
- self.position = vector(x or 0, y or 0)
- self.velocity = vector(0, 0)
- 
- self.visible = true
- self.base_sprite = base_sprite or sprite(0)
- 
- self.collision_mask = 0x1
- self.collider = box(0, 0, 8, 8)
- 
- self.tags = {...}
-end
-
-function entity:update()
- -- self:do_map_collision()
- self:move()
- 
- local a = self:get_animation()
- 
- if (a) a:update()
-end
-
-function entity:draw()
- if (not self.visible) return
- 
- local a = self:get_animation()
- local s = self.base_sprite
- 
- if (a) s = a:get_sprite()
- 
- s:draw(self.position:unpack())
-end
-
-----
-
-function entity:add_animation(name, a)
- if not self.animations then
-  self.animations = {}
-  self.current_animation = name
- end
-  
- self.animations[name] = a
-end
- 
--- returns name or current_animation
-function entity:get_animation(name)
- if (not self.animations) return
- if (name) assert(self.animations[name])
-  
- return self.animations[name or self.current_animation]
-end
- 
-function entity:set_animation(name)
- if (self.current_animation == name) return
-  
- self.current_animation = name
- self:get_animation():restart()
-end
- 
-----
-
--- fixme: 8x8 colliders 'skip' on dx, dy > 0
-function entity:do_map_collision()
- if (band(self.collision_mask, 0x1) == 0) return
- 
- local c = self:get_collider()
- 
- local x, y = c.x, c.y
- local w, h = c.w, c.h
- 
- local dx, dy = self.velocity:unpack()
- 
- local tx, ty = x + dx, y + dy
- 
- local mx, my = flr(tx / 8) * 8, flr(ty / 8) * 8
- 
- if dx < 0 then
-  if is_tile_solid(tx, y) or is_tile_solid(tx, y + h - 1) then
-   dx = mx + 8 - x
-  end
- elseif dx > 0 then
-  if is_tile_solid(tx + w - 1, y) or is_tile_solid(tx + w - 1, y + h - 1) then
-   dx = mx - (x - w)
-  end
- end
- 
- if dy < 0 then
-  if is_tile_solid(x, ty) or is_tile_solid(x + w - 1, ty) then
-   dy = my + 8 - y
-  end
- elseif dy > 0 then
-  if is_tile_solid(x, ty + h - 1) or is_tile_solid(x + w - 1, ty + h - 1) then
-   dy = my - (y - h)
-  end
- end
- 
- self.velocity = vector(dx, dy)
-end
-
--- todo: either consolidate map/entity collision or refine
-function entity:handle_collision(e)
- local c1 = self:get_collider()
- local c2 = e:get_collider()
- 
- local x1, y1 = c1.x, c1.y
- local w1, h1 = c1.w, c1.h
- 
- local dx, dy = self.velocity:unpack()
- 
- local x2, y2 = c2.x, c2.y
- local w2, h2 = c2.w, c2.h
- 
- local tx, ty = self.position:unpack()
- 
- if dx < 0 then
-  tx = x2 + w2 - (x1 - tx)
- elseif dx > 0 then
-  tx = x2 - w1 - (x1 - tx)
- end
- 
- if dy < 0 then
-  ty = y2 + h2 - (y1 - ty)
- elseif dy > 0 then
-  ty = y2 - h1 - (y1 - ty)
- end
- 
- -- self:place(tx - (tx - x), ty - (ty - y))
- self:place(tx, ty)
-end
-
-----
-
--- get a properly offset collider
-function entity:get_collider()
- local c = self.collider
- 
- local x, y = self.position:unpack()
- 
- return box(c.x + x, c.y + y, c.w, c.h)
-end
- 
-----
-
-function entity:move()
- -- if (not self.dynamic) return
-
- self.position += self.velocity
-end
- 
-function entity:place(x, y)
- self.position = vector(x, y)
-end
--->8
-------------
--- player --
-------------
-
-player = entity:extend()
-
-function player:new()
- player.super.new(self, 0, 0, sprite(64))
- 
- self:add_animation('idle',   animation(sprite.batch(64, 66, 67, 68), 0.5, false))
- self:add_animation('walk_d', animation(sprite.batch(64, 65)))
- self:add_animation('walk_l', animation(sprite.batch(80, 81, 82)))
- self:add_animation('walk_u', animation(sprite.batch(96, 97, 98)))
- self:add_animation('walk_r', animation(sprite.batch(112, 113, 114)))
- 
- self:set_animation('walk_d')
- 
- self.idle_threshold = 120
- self.idle_ticks = 0
- 
- self.collider = box(2, 4, 4, 4)
-end
-
-function player:update()
- local xin = btn(➡️) and 1 or btn(⬅️) and -1 or 0
- local yin = btn(⬇️) and 1 or btn(⬆️) and -1 or 0
- 
- if xin ~= 0 or yin ~= 0 then
-  self.idle_ticks = 0
-  self:get_animation():resume()
-  
-  if xin > 0 then
-   self:set_animation('walk_r')
-  elseif xin < 0 then
-   self:set_animation('walk_l')
-  end
-  
-  if yin > 0 then
-   self:set_animation('walk_d')
-  elseif yin < 0 then
-   self:set_animation('walk_u')
-  end
- else
-  self.idle_ticks += 1
-  
-  if self.idle_ticks >= self.idle_threshold then
-   self:set_animation('idle')
-  else
-   self:get_animation():pause()
-  end
- end
- 
- self.velocity = vector(xin, yin)
-
- self.super.update(self)
 end
 __gfx__
 0000000006d666600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
